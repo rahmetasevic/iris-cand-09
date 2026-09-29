@@ -1,0 +1,103 @@
+# Runs the documented smoke path on clean GitHub-hosted Docker hosts:
+# both env templates on amd64, the dev template on arm64, plus the test
+# suite inside the stack.
+name: docker-smoke
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: ${{ matrix.template }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { template: dev, arch: amd64, runner: ubuntu-24.04, tests: true }
+          - { template: second-host, arch: amd64, runner: ubuntu-24.04, tests: false }
+          # postgis/postgis is amd64-only; arm64 hosts point IRIS_POSTGIS_IMAGE at a multi-arch build.
+          - { template: dev, arch: arm64, runner: ubuntu-24.04-arm, tests: false,
+              postgis_image: "imresamu/postgis:16-3.4" }
+    env:
+      ENV_FILE: deploy/ci.env
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker versions
+        run: docker version && docker compose version
+
+      - name: Env file from template
+        run: |
+          cp "deploy/${{ matrix.template }}.env.example" "$ENV_FILE"
+          if [ -n "${{ matrix.postgis_image }}" ]; then
+            sed -i "s#^IRIS_POSTGIS_IMAGE=.*#IRIS_POSTGIS_IMAGE=${{ matrix.postgis_image }}#" "$ENV_FILE"
+          fi
+          grep -v '^#' "$ENV_FILE" | grep .
+
+      - name: Smoke path (scripts/smoke.sh)
+        run: sh scripts/smoke.sh "$ENV_FILE" 2>&1 | tee smoke.log
+
+      - name: No secrets in the image
+        run: |
+          image=$(docker compose --env-file "$ENV_FILE" config --images | grep '^iris-pilot:' | head -n 1)
+          password=$(cat secrets/*db_password)
+          fail() { echo "::error::$1"; exit 1; }
+          docker image inspect "$image" --format '{{json .Config.Env}}' | tee image-env.json
+          if grep -qi password image-env.json; then fail "image environment mentions a password"; fi
+          docker history --no-trunc "$image" > image-history.txt
+          if grep -qF "$password" image-history.txt; then fail "password found in image history"; fi
+          if docker run --rm --entrypoint sh "$image" -c 'ls -A /app; test -e /app/.env || test -d /app/secrets'; then
+            fail ".env or secrets/ present in the image"
+          fi
+          if docker run --rm --entrypoint sh "$image" -c "grep -rqsF '$password' /app /opt/venv"; then
+            fail "password found in image files"
+          fi
+          echo "image contains no password, .env or secrets/"
+
+      - name: Normal startup path (docker compose up)
+        run: |
+          dc() { docker compose --env-file "$ENV_FILE" "$@"; }
+          dc down
+          dc up --detach
+          worker=$(dc ps --all --quiet worker)
+          for _ in $(seq 1 90); do
+            state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$worker")
+            echo "worker: $state"
+            case "$state" in
+              "exited 0"*) echo "one-shot worker finished"; break ;;
+              exited*) dc logs worker; exit 1 ;;
+              "running 0 healthy") echo "long-running worker healthy"; break ;;
+            esac
+            sleep 2
+          done
+          case "$state" in "exited 0"*|"running 0 healthy") ;; *) echo "worker did not settle"; exit 1 ;; esac
+          # The worker must only have started after migrate completed on a healthy db.
+          dc logs --no-log-prefix migrate | tee migrate.log | grep -q "schema up to date"
+          dc logs --no-log-prefix worker | tee worker.log | grep -q '"run succeeded"\|msg="run succeeded"'
+
+      - name: Tests inside the stack
+        if: matrix.tests
+        run: docker compose --env-file "$ENV_FILE" --profile test run --rm --build tests -q 2>&1 | tee tests.log
+
+      - name: Report failure details
+        if: failure()
+        run: |
+          docker compose --env-file "$ENV_FILE" --profile test ps --all || true
+          docker compose --env-file "$ENV_FILE" --profile test logs --no-color > compose.log 2>&1 || true
+          # Annotations are readable without signing in, which helps triage.
+          for f in smoke.log tests.log compose.log; do
+            [ -s "$f" ] || continue
+            body=$(tail -n 60 "$f" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=${{ matrix.template }}-${{ matrix.arch }} ${f}::${body}"
+          done
+
+      - name: Tear down
+        if: always()
+        run: docker compose --env-file "$ENV_FILE" --profile test down --volumes --remove-orphans || true

@@ -1,0 +1,155 @@
+# IRIS pilot runtime: PostGIS + one-shot migration job + worker.
+#
+# Everything host-, country- or credential-specific is interpolated from the
+# env file (see deploy/*.env.example). Nothing here names a country or region.
+#
+#   docker compose --env-file .env up --build          # normal run
+#   scripts/smoke.sh  |  scripts/smoke.ps1              # documented smoke path
+
+name: iris
+
+x-app: &app
+  image: iris-pilot:${IRIS_IMAGE_TAG:-local}
+  build:
+    context: .
+    target: runtime
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp
+  user: "${IRIS_UID:-10001}:${IRIS_GID:-10001}"
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+
+# Database access for every Python service. The password is never passed as
+# an environment variable; it is mounted as a secret file.
+x-db-env: &db-env
+  IRIS_DB_HOST: db
+  IRIS_DB_PORT: "5432"
+  IRIS_DB_NAME: ${IRIS_DB_NAME:?set IRIS_DB_NAME in the env file}
+  IRIS_DB_USER: ${IRIS_DB_USER:?set IRIS_DB_USER in the env file}
+  IRIS_DB_PASSWORD_FILE: /run/secrets/db_password
+  IRIS_DB_SSLMODE: ${IRIS_DB_SSLMODE:-prefer}
+  IRIS_LOG_LEVEL: ${IRIS_LOG_LEVEL:-INFO}
+  IRIS_STARTUP_TIMEOUT_S: ${IRIS_STARTUP_TIMEOUT_S:-60}
+
+services:
+  db:
+    image: ${IRIS_POSTGIS_IMAGE:-postgis/postgis:16-3.4}
+    environment:
+      POSTGRES_DB: ${IRIS_DB_NAME:?set IRIS_DB_NAME in the env file}
+      POSTGRES_USER: ${IRIS_DB_USER:?set IRIS_DB_USER in the env file}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_INITDB_ARGS: --encoding=UTF8
+    secrets: [db_password]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    # Loopback checks only succeed once the final server is up (the init
+    # phase listens on the unix socket only), so "healthy" means usable.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" && psql -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -tAc 'SELECT 1' >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    shm_size: 256mb
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    environment:
+      <<: *db-env
+    secrets: [db_password]
+    networks: [backend]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  worker:
+    <<: *app
+    command: ["run"]
+    environment:
+      <<: *db-env
+      IRIS_COUNTRY_CODE: ${IRIS_COUNTRY_CODE:?set IRIS_COUNTRY_CODE in the env file}
+      IRIS_REGION_CODE: ${IRIS_REGION_CODE:?set IRIS_REGION_CODE in the env file}
+      IRIS_SOURCE_ENDPOINT: ${IRIS_SOURCE_ENDPOINT:?set IRIS_SOURCE_ENDPOINT in the env file}
+      IRIS_SOURCE_TIMEOUT_S: ${IRIS_SOURCE_TIMEOUT_S:-30}
+      IRIS_SOURCE_MAX_BYTES: ${IRIS_SOURCE_MAX_BYTES:-50000000}
+      IRIS_OUTPUT_DIR: ${IRIS_OUTPUT_DIR:-/data/output}
+      IRIS_ECO_POINTS_PER_M2: ${IRIS_ECO_POINTS_PER_M2:-8}
+      IRIS_MAX_REJECT_RATIO: ${IRIS_MAX_REJECT_RATIO:-0.5}
+      IRIS_RUN_INTERVAL_S: ${IRIS_RUN_INTERVAL_S:-0}
+    secrets: [db_password]
+    volumes:
+      - ${IRIS_OUTPUT_MOUNT:-output}:${IRIS_OUTPUT_DIR:-/data/output}
+      - ${IRIS_SOURCE_MOUNT:-./fixtures}:/data/source:ro
+    networks: [backend, egress]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      source:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "python", "-m", "iris_pilot", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: ${IRIS_WORKER_RESTART:-no}
+
+  # Local stand-in for a remote source endpoint. Enabled with
+  # COMPOSE_PROFILES=mock-source; serves ./fixtures over plain HTTP.
+  source:
+    <<: *app
+    profiles: [mock-source]
+    entrypoint: ["python", "-m", "http.server", "8080", "--bind", "0.0.0.0", "--directory", "/srv/fixtures"]
+    command: []
+    volumes:
+      - ./fixtures:/srv/fixtures:ro
+    networks: [egress]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    restart: unless-stopped
+
+  # Unit + integration tests inside the stack: docker compose --profile test run --rm tests
+  tests:
+    <<: *app
+    image: iris-pilot-test:${IRIS_IMAGE_TAG:-local}
+    build:
+      context: .
+      target: test
+    profiles: [test]
+    environment:
+      <<: *db-env
+      IRIS_TEST_REQUIRE_DB: "1"
+    secrets: [db_password]
+    networks: [backend]
+    depends_on:
+      db:
+        condition: service_healthy
+
+secrets:
+  db_password:
+    file: ${IRIS_DB_SECRET_FILE:-./secrets/db_password}
+
+volumes:
+  pgdata:
+  output:
+
+networks:
+  # No route out: the database is reachable only by the services on it.
+  backend:
+    internal: true
+  egress: {}

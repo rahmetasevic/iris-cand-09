@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# IRIS pilot runtime
+secrets/
+output/
+deploy/*.env
+!deploy/*.env.example

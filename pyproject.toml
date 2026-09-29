@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iris-pilot"
+version = "0.1.0"
+description = "IRIS pilot runtime: country-scoped candidate-site ingestion into PostGIS"
+requires-python = ">=3.12"
+dependencies = ["psycopg[binary]>=3.3,<3.4"]
+
+[project.optional-dependencies]
+test = ["pytest>=9.1,<10"]
+
+[project.scripts]
+iris-pilot = "iris_pilot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+iris_pilot = ["migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = ["integration: needs a reachable PostgreSQL/PostGIS server (IRIS_DB_* variables)"]

@@ -1,0 +1,60 @@
+{
+  "type": "FeatureCollection",
+  "name": "synthetic candidate sites, DE-NW",
+  "country_code": "DE",
+  "region_code": "NW",
+  "source_date": "2025-06-30",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "site_id": "S-0001", "name": "Former rail yard, west", "positional_accuracy_m": 2.5 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[6.7700, 51.2200], [6.7730, 51.2200], [6.7730, 51.2218], [6.7700, 51.2218], [6.7700, 51.2200]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "site_id": "S-0002", "name": "Brownfield parcels, north" },
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [[[6.9500, 51.4500], [6.9515, 51.4500], [6.9515, 51.4509], [6.9500, 51.4509], [6.9500, 51.4500]]],
+          [[[6.9520, 51.4500], [6.9535, 51.4500], [6.9535, 51.4509], [6.9520, 51.4509], [6.9520, 51.4500]]]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "site_id": "S-0003", "name": "Quarry edge with retained pond", "source_date": "2025-05-15", "positional_accuracy_m": 5 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [[7.0100, 51.3000], [7.0140, 51.3000], [7.0140, 51.3025], [7.0100, 51.3025], [7.0100, 51.3000]],
+          [[7.0115, 51.3010], [7.0115, 51.3015], [7.0125, 51.3015], [7.0125, 51.3010], [7.0115, 51.3010]]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "site_id": "S-0004", "name": "Self-intersecting outline (must be rejected)" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[6.8000, 51.2500], [6.8020, 51.2520], [6.8020, 51.2500], [6.8000, 51.2520], [6.8000, 51.2500]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "site_id": "S-0005", "name": "Parcel without geometry (must be rejected)" },
+      "geometry": null
+    },
+    {
+      "type": "Feature",
+      "properties": { "site_id": "S-0006", "positional_accuracy_m": 10 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[6.7800, 51.1900], [6.7810, 51.1900], [6.7810, 51.1906], [6.7800, 51.1906], [6.7800, 51.1900]]]
+      }
+    }
+  ]
+}
