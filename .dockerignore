@@ -1,0 +1,14 @@
+# Allow-list: only what the image needs enters the build context, so local
+# .env files, secrets/ and outputs can never be copied into an image.
+**
+!Dockerfile
+!.dockerignore
+!docker-compose.yml
+!pyproject.toml
+!requirements/
+!src/
+!tests/
+!fixtures/
+!deploy/*.env.example
+**/__pycache__
+**/*.py[cod]
