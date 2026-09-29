@@ -34,6 +34,23 @@ def unlock_scope(conn: psycopg.Connection, scope: str) -> None:
     conn.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (f"iris-scope:{scope}",))
 
 
+def abandon_stale_runs(conn: psycopg.Connection, *, country_code: str, region_code: str) -> int:
+    """Close runs of this scope that are still 'running'.
+
+    Only called while holding the scope lock, so no live worker can own them:
+    they were left by a worker that died before it could record the outcome.
+    """
+    return conn.execute(
+        """
+        UPDATE iris.ingest_run
+           SET status = 'failed', finished_at = now(),
+               error = 'abandoned: the worker stopped before recording an outcome'
+         WHERE country_code = %s AND region_code = %s AND status = 'running'
+        """,
+        (country_code, region_code),
+    ).rowcount
+
+
 def start_run(conn: psycopg.Connection, *, country_code: str, region_code: str,
               source_uri: str) -> tuple[int, datetime]:
     row = conn.execute(

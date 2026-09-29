@@ -45,6 +45,11 @@ def run_once(conn: psycopg.Connection, settings: PipelineSettings) -> RunResult:
     if not store.try_lock_scope(conn, settings.scope):
         raise RunFailed(f"another run for {settings.scope} is in progress")
     try:
+        abandoned = store.abandon_stale_runs(conn, country_code=settings.country_code,
+                                             region_code=settings.region_code)
+        if abandoned:
+            log.warning("closed runs abandoned by a previous worker",
+                        extra=fields(scope=settings.scope, runs=abandoned))
         return _run_locked(conn, settings)
     finally:
         store.unlock_scope(conn, settings.scope)

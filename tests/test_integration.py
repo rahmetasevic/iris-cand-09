@@ -256,6 +256,19 @@ def test_unknown_srid_is_refused(conn, migrated_db, tmp_path) -> None:
         run_once(conn, settings)
 
 
+def test_run_left_running_by_a_crashed_worker_is_closed(conn, migrated_db, tmp_path) -> None:
+    insert = "INSERT INTO iris.ingest_run (country_code, region_code, source_uri) VALUES (%s, %s, 'u') RETURNING run_id"
+    stale = conn.execute(insert, ("DE", "NW")).fetchone()[0]
+    other_scope = conn.execute(insert, ("AT", "9")).fetchone()[0]
+
+    result = run_once(conn, make_settings(migrated_db, tmp_path, country="DE", region="NW"))
+
+    status = dict(conn.execute("SELECT run_id, status FROM iris.ingest_run").fetchall())
+    assert status == {stale: "failed", other_scope: "running", result.run_id: "succeeded"}
+    error = conn.execute("SELECT error FROM iris.ingest_run WHERE run_id = %s", (stale,)).fetchone()[0]
+    assert error.startswith("abandoned")
+
+
 def test_concurrent_run_for_same_scope_is_refused(conn, migrated_db, tmp_path) -> None:
     with connect(migrated_db, application_name="other") as other:
         other.execute("SELECT pg_advisory_lock(hashtextextended('iris-scope:DE-NW', 0))")
