@@ -1,6 +1,6 @@
 # Runs the documented smoke path on clean GitHub-hosted Docker hosts:
-# both env templates on amd64, the dev template on arm64, plus the test
-# suite inside the stack.
+# both env templates on amd64, the dev template on arm64, the PowerShell
+# script (PowerShell 7 on Linux), plus the test suite inside the stack.
 name: docker-smoke
 
 on:
@@ -13,18 +13,20 @@ permissions:
 
 jobs:
   smoke:
-    name: ${{ matrix.template }} / ${{ matrix.arch }}
+    name: ${{ matrix.template }} / ${{ matrix.arch }} / ${{ matrix.script }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { template: dev, arch: amd64, runner: ubuntu-24.04, tests: true }
-          - { template: second-host, arch: amd64, runner: ubuntu-24.04, tests: false }
+          - { template: dev, arch: amd64, runner: ubuntu-24.04, script: sh, tests: true }
+          - { template: second-host, arch: amd64, runner: ubuntu-24.04, script: sh, tests: false }
           # postgis/postgis is amd64-only; arm64 hosts point IRIS_POSTGIS_IMAGE at a multi-arch build.
-          - { template: dev, arch: arm64, runner: ubuntu-24.04-arm, tests: false,
+          - { template: dev, arch: arm64, runner: ubuntu-24.04-arm, script: sh, tests: false,
               postgis_image: "imresamu/postgis:16-3.4" }
+          # Hosted Windows runners cannot run Linux containers; this exercises smoke.ps1 itself.
+          - { template: dev, arch: amd64, runner: ubuntu-24.04, script: pwsh, tests: false }
     env:
       ENV_FILE: deploy/ci.env
     steps:
@@ -41,8 +43,13 @@ jobs:
           fi
           grep -v '^#' "$ENV_FILE" | grep .
 
-      - name: Smoke path (scripts/smoke.sh)
-        run: sh scripts/smoke.sh "$ENV_FILE" 2>&1 | tee smoke.log
+      - name: Smoke path (scripts/smoke.${{ matrix.script == 'pwsh' && 'ps1' || 'sh' }})
+        run: |
+          if [ "${{ matrix.script }}" = pwsh ]; then
+            pwsh -NoProfile -File scripts/smoke.ps1 -EnvFile "$ENV_FILE" 2>&1 | tee smoke.log
+          else
+            sh scripts/smoke.sh "$ENV_FILE" 2>&1 | tee smoke.log
+          fi
 
       - name: No secrets in the image
         run: |
@@ -95,7 +102,7 @@ jobs:
           for f in smoke.log tests.log compose.log; do
             [ -s "$f" ] || continue
             body=$(tail -n 60 "$f" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
-            echo "::error title=${{ matrix.template }}-${{ matrix.arch }} ${f}::${body}"
+            echo "::error title=${{ matrix.template }}-${{ matrix.arch }}-${{ matrix.script }} ${f}::${body}"
           done
 
       - name: Tear down

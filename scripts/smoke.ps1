@@ -34,8 +34,8 @@ Write-Step "using $composeVersion"
 
 if (-not (Test-Path $EnvFile)) {
     if ($EnvFile -ne ".env") { throw "env file not found: $EnvFile" }
-    Copy-Item "deploy\dev.env.example" ".env"
-    Write-Step "created .env from deploy\dev.env.example"
+    Copy-Item "deploy/dev.env.example" ".env"
+    Write-Step "created .env from deploy/dev.env.example"
 }
 
 $secretFile = "./secrets/db_password"
@@ -50,6 +50,11 @@ if (-not (Test-Path $secretPath) -or (Get-Item $secretPath).Length -eq 0) {
     $password = ([Convert]::ToBase64String($bytes) -replace '[^A-Za-z0-9]', '').Substring(0, 40)
     # No BOM and no trailing newline.
     [System.IO.File]::WriteAllText($secretPath, $password)
+    # PowerShell 7 on Linux/macOS: same modes as smoke.sh (folder 0700, file 0644).
+    if ($IsLinux -or $IsMacOS) {
+        & chmod 700 (Split-Path $secretPath)
+        & chmod 644 $secretPath
+    }
     Write-Step "generated a random database password in $secretFile"
 }
 
